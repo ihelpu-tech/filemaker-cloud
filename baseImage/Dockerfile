@@ -1,5 +1,9 @@
 FROM ubuntu:18.04
 
+LABEL containerName="fmsbase"
+LABEL maintainer="iHelpU.Tech"
+LABEL email="support@ihelpu.tech"
+
 # update all software download sources
 RUN DEBIAN_FRONTEND=noninteractive      \
     apt update
@@ -83,4 +87,4 @@ EXPOSE 5003
 # command as root to initialize
 # user management
 USER root
-CMD ["/sbin/init"]
+# CMD ["/sbin/init"]
