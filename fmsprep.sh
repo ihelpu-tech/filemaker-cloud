@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -e # Script exists on the first failure
-set -x # For debugging purpose
+# set -x # For debugging purpose
 
 function usage () {
     cat <<USAGE
@@ -8,6 +8,8 @@ function usage () {
     Usage: $0 [args]
 
     Options:
+                    FileMaker Deployment Options
+        ---------------------------------------------------- 
         -s, --server-version        Select FileMaker Server Version
 
         -d, --deployment-options    Set FMS deployment options
@@ -18,6 +20,15 @@ function usage () {
 
         -l, --license-path          Define a path to a license certificate
 
+                    Scipt Configuration Options
+        ----------------------------------------------------
+        --create-config             Generate Asisted Install file
+        --download                  Download and extract FileMaker 
+                                    Server from Claris
+        --download-only             Only download FileMaker Server
+        --clean                     Cleanup cached files
+
+                                Usage
         ----------------------------------------------------
         -h, --help, --usage:    	Print this help message.
         -v, --version               Get this script version
@@ -101,6 +112,12 @@ function version () {
 VERSION
 }
 
+# Declare booleans
+declare CLEAN_OLD=FALSE
+declare CREATE_CONFIG=FALSE
+declare DOWNLOAD_AND_EXTRACT=FALSE
+declare DOWNLOAD_ONLY=FALSE
+
 # Get flags
 while [ "$1" != "" ]; do
     case $1 in
@@ -134,6 +151,24 @@ while [ "$1" != "" ]; do
             LICENSE_PATH=$1
             ;;
 
+        --create-config)
+            CREATE_CONFIG=TRUE
+            ;;
+
+        --download)
+            DOWNLOAD_AND_EXTRACT=TRUE
+            ;;
+        
+        --clean)
+            CLEAN_OLD=TRUE
+            echo "I'm running!"
+            ;;
+
+        --download-only)
+            DOWNLOAD_ONLY=TRUE
+            ;;
+
+
         -v | --version)
             version
             exit 1
@@ -163,7 +198,7 @@ function requiredFlags () {
        exit 1
     fi
 }
-requiredFlags
+# requiredFlags
 
 # Set undefined options to default
 function setDefaultOptions () {
@@ -183,7 +218,6 @@ function setDefaultOptions () {
         ADMIN_PIN=${ADMIN_PIN:-1234}
     fi
 }
-setDefaultOptions
 
 # Make sure responses are valid.
 function responseValidation () {
@@ -195,17 +229,16 @@ function createEnv () {
     mkdir -p $PWD/fms/download
     mkdir -p $PWD/fms/install
 }
-createEnv
 
 # Download FileMaker Server from Claris
 function getFileMakerServer () {
     curl https://downloads.claris.com/esd/fms_${FMS_VERSION}.zip \
         --output $PWD/fms/download/fms_${FMS_VERSION}.zip \
-        --fail 
-        # --stderr downloadError.log
+        --fail #\
+        #--stderr downloadError.log
     
     if [ $? != 0 ]; then
-        echo "Error: The FileMaker Server download failed. See downloadError.log for details."
+        echo "Error: The FileMaker Server download failed."
         exit 1
     fi
 
@@ -234,19 +267,89 @@ function cleanOld () {
 }
 
 # Make the magic happen
-function makeReady () {
-    checkCached
-    if [ $DOWNLOAD_CACHED = TRUE ]; 
-        then
-            cleanOld
-            extractServer
-        else
-            getFileMakerServer
-            extractServer
-    fi
+# function makeReady () {
+#     checkCached
+#     if [ $DOWNLOAD_CACHED = TRUE ]; 
+#         then
+#             cleanOld
+#             extractServer
+#         else
+#             getFileMakerServer
+#             extractServer
+#     fi
+# }
+
+# Created 'Assisted Install.txt' config file
+function assistedInstall () {
+    cat <<EOF > $PWD/fms/install/'Assisted Install.txt'
+[Assisted Install]
+
+License Accepted=1
+
+Deployment Options=$DEPLOYMENT_OPTIONS
+
+Admin Console User=$ADMIN_USER
+
+Admin Console Password=$ADMIN_PASSWORD
+
+Admin Console PIN=$ADMIN_PIN
+
+License Certificate Path=$LICENSE_PATH
+
+EOF
 }
 
-makeReady
+### Clean install folder if user specified --clean ###
+if [ $CLEAN_OLD == TRUE ];then
+    echo "Cleaning up old files..."
+    cleanOld
+    echo "Done"
+fi
 
+### Only download FMS if user specified --download-only ###
+if [ $DOWNLOAD_ONLY == TRUE ] && [ $DOWNLOAD_AND_EXTRACT != TRUE ];then
+    requiredFlags
+    createEnv
+    echo "Downloading FileMaker Server from Claris..."
+    getFileMakerServer
+
+    elif [ $DOWNLOAD_ONLY == TRUE ] && [ $DOWNLOAD_AND_EXTRACT == TRUE ]; then
+        echo "ERROR: --download-only and --download cannot be specified at the same time!"
+        exit 1
+fi
+
+### Download and extract FMS if user specified --download ###
+if [ $DOWNLOAD_AND_EXTRACT == TRUE ] && [ $DOWNLOAD_ONLY != TRUE ];then
+    requiredFlags
+    createEnv
+    echo "Downloading FileMaker Server from Claris..."
+    checkCached
+    if [ $DOWNLOAD_CACHED == TRUE ];then
+        echo "Download cached"
+        elif [ $DOWNLOAD_CACHED == FALSE ];then
+        getFileMakerServer
+    fi
+        
+    echo "Extracting archieve..."
+    extractServer
+    echo "Done"
+    elif [ $DOWNLOAD_ONLY == TRUE ] && [ $DOWNLOAD_AND_EXTRACT == TRUE ]; then
+        echo "ERROR: --download-only and --download cannot be specified at the same time!"
+        exit 1
+fi
+
+
+### Create config if user specified --create-config ###
+if [ $CREATE_CONFIG == TRUE ];then
+    echo "Generating Assisted Install.txt"
+    createEnv
+    setDefaultOptions
+    assistedInstall
+    echo "Done"
+fi
+
+### 
+
+echo
 echo "FMS Prep successfull"
 exit 0

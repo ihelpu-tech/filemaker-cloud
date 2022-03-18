@@ -75,9 +75,17 @@ RUN DEBIAN_FRONTEND=noninteractive      \
 RUN DEBIAN_FRONTEND=noninteractive      \
     apt clean                        -y
 
+# Copy FMS server to the container
+# COPY data/fms*.zip fms/download/fms.zip
+# RUN unzip fms/download/fms.zip -d fms/install/
+
+# COPY data/Assisted\ Install.txt fms/install/Assisted\ Install.txt
+
+
 # document the ports that should be
 # published when filemaker server
 # is installed
+
 EXPOSE 80
 EXPOSE 443
 EXPOSE 2399
@@ -87,4 +95,5 @@ EXPOSE 5003
 # command as root to initialize
 # user management
 USER root
-# CMD ["/sbin/init"]
+CMD ["/sbin/init"]
+# CMD [ "/bin/sh", "-c", "sleep 3600" ]
