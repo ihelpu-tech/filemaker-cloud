@@ -248,7 +248,13 @@ function getFileMakerServer () {
 
 # Extract zip
 function extractServer () {
-    unzip $PWD/fms/download/fms*.zip -d $PWD/fms/install
+    if ! command -v unzip &> /dev/null; then
+        echo "Error: unzip program not installed on machine."
+        echo "Install unzip. Ex: apt isntall unzip"
+        exit 1
+    else
+        unzip $PWD/fms/download/fms*.zip -d $PWD/fms/install
+    fi
 }
 
 # Check for cached version of FileMaker Server
