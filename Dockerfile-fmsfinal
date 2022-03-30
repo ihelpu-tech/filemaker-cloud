@@ -1,0 +1,17 @@
+FROM fmsdocker:prep
+
+ENV LICENSE_ACCEPTED=1 \
+    DEPLOYMENT_OPTIONS=0 \
+    ADMIN_USER=admin \
+    ADMIN_PASSWORD=password \
+    ADMIN_PIN=1234 \
+    LICENSE_PATH=
+
+VOLUME [ "/opt/FileMaker/FileMaker Server/Data" ]
+VOLUME [ "/backup" ]
+
+COPY data/fms.zip /fms/download/
+COPY fmsprep.sh /usr/local/bin/fmsprep
+COPY checkInit.sh /usr/local/bin/checkInit
+
+CMD [ "/bin/bash", "-c", "fmsprep --debug --create-config --env --extract-only --install" ]
