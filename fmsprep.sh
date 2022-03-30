@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e # Script exists on the first failure
-# set -x # For debugging purpose
 
+### Help Function ###
 function usage () {
     cat <<USAGE
     
@@ -20,20 +20,27 @@ function usage () {
 
         -l, --license-path          Define a path to a license certificate
 
-                    Scipt Configuration Options
+                    Script Configuration Options
         ----------------------------------------------------
-        --create-config             Generate Asisted Install file
+        --clean                     Cleanup cached files.
+        --create-config             Generate Asisted Install file.
+        --create-env                Explicitly create download and install
+                                    locations.
+        --debug                     Use 'set -x' for debugging.
         --download                  Download and extract FileMaker 
-                                    Server from Claris
-        --download-only             Only download FileMaker Server
-        --clean                     Cleanup cached files
+                                    Server from Claris.
+        --download-only             Only download FileMaker Server.
+        --env                       Use environment variables (Docker).
+        --extract-only              Only extract FMS archieve.
+        --install                   Install FileMaker Server.
 
                                 Usage
         ----------------------------------------------------
         -h, --help, --usage:    	Print this help message.
-        -v, --version               Get this script version
+        -v, --version               Get this script version.
     
 
+    Filemaker Deployment Options:
     -s, --server-version)
         This defines the version of FileMaker Server. This version number
         is used to download a copy of FMS from Claris so it must be the full
@@ -94,15 +101,214 @@ function usage () {
             Linux: /opt/FileMaker/FileMaker Server/CStore/LicenseFile 
             on the machine where FileMaker Server is being installed
 
+    Script Configuration Options:
+    --clean)
+        Cleanup cached files. Removes files in the following locations:
+            - fms/install/*
+
+    --create-config)
+        Generates 'Asisted Install.txt' file. This file is used to configure FileMaker
+        Server for the first time.
+
+    --create-env)
+        Explicitly create download and install locations. This is used to ensure the script
+        is running in the correct directory. Takes your current working directory and makes
+        new directories in the following locations:
+            - fms/install
+            - fms/download
+
+    --debug)
+        Use 'set -x' for debugging. This will print out the commands being run.
+
+    --download)
+        Download and extract FileMaker Server from Claris. This will download the
+        FMS archive from Claris and extract it to the 'fms/download' directory. Note that
+        --version must be set.
+
+    --download-only)
+        Only download FileMaker Server. This will download the FMS archive from Claris
+        and place it in the 'fms/download' directory. Note that --version must be set.
+
+    --env)
+        Use environment variables (Docker). This will use the environment variables
+        to set the following variables:
+            - LICENSE_ACCEPTED
+            - DEPLOYMENT_OPTIONS
+            - ADMIN_USER
+            - ADMIN_PASSWORD
+            - ADMIN_PIN
+            - LICENSE_PATH
+        Options can be set in the .env file or by using the command line option "-e"
+        at run time.
+
+    --extract-only)
+        Only extract FMS archieve. This will extract the cached FMS archive from the
+        'fms/download' directory to the 'fms/install' directory. Note: The script is 
+        configured to only extract the debian package from the FMS archive. All other 
+        files are ignored, including the documentation and the default assissted 
+        install file.
+
+    --install)
+        Install FileMaker Server. This will install the FMS package from the 'fms/install'
+        directory. The assissted install file is used to configure the server and must
+        be located in the 'fms/install' directory. Everything from the 'fms/install'
+        directory will be copied to /install before installation. Requires root privileges
+        to create the /install directory and to install the FMS package.
+
+
 USAGE
     exit 1
+}
+
+### Define Functions (Listed alphabetically)###
+
+# Created 'Assisted Install.txt' config file
+function assistedInstall () {
+    cat <<EOF > $PWD/fms/install/'Assisted Install.txt'
+[Assisted Install]
+
+License Accepted=1
+
+Deployment Options=$DEPLOYMENT_OPTIONS
+
+Admin Console User=$ADMIN_USER
+
+Admin Console Password=$ADMIN_PASSWORD
+
+Admin Console PIN=$ADMIN_PIN
+
+License Certificate Path=$LICENSE_PATH
+
+EOF
+}
+
+# Check for cached version of FileMaker Server
+function checkCached () {
+    if compgen -G "$PWD/fms/download/fms*.zip" > /dev/null; then
+            DOWNLOAD_CACHED=TRUE
+        else
+            DOWNLOAD_CACHED=FALSE
+    fi
+}
+
+# Cleanup old install
+function cleanOld () {
+    rm $PWD/fms/install/*
+}
+
+# Get local envirnment and create directories
+function createEnv () {
+    mkdir -p $PWD/fms/download
+    mkdir -p $PWD/fms/install
+}
+
+# Extract zip
+function extractServer () {
+    if ! command -v unzip &> /dev/null; then
+        echo "Error: unzip program not installed on machine."
+        echo "Install unzip. Ex: apt isntall unzip"
+        exit 1
+    else
+        unzip -j $PWD/fms/download/fms*.zip *.deb -d $PWD/fms/install
+    fi
+}
+
+# Download FileMaker Server from Claris
+function getFileMakerServer () {
+    # Check to make sure $FMS_VERSION is set
+    if [ -z "$FMS_VERSION" ]; then
+        echo "Error: FMS_VERSION is not set."
+        echo "Set FMS_VERSION to the version of FileMaker Server you want to install."
+        exit 1
+    fi
+    curl https://downloads.claris.com/esd/fms_${FMS_VERSION}.zip \
+        --output $PWD/fms/download/fms_${FMS_VERSION}.zip \
+        --fail #\
+        #--stderr downloadError.log
+    
+    if [ $? != 0 ]; then
+        echo "Error: The FileMaker Server download failed."
+        exit 1
+    fi
+    echo "FMS Download from Claris successful."
+}
+
+# Install FileMaker Server using the 'Assisted Install.txt' file
+function installServer () {
+    if [ -f $PWD/fms/install/Assisted\ Install.txt ]; then
+        echo "Installing FileMaker Server..."
+        local FMS_PACKAGE_NAME=$(ls $PWD/fms/install/*.deb)
+        
+        # Check if user is root
+        if [ "$EUID" -ne 0 ]; then
+            local USER_ROOT=FALSE
+        else
+            local USER_ROOT=TRUE
+        fi
+
+        #Cache current working directory
+        local CURRENT_DIR=$PWD
+
+        # Install FileMaker Server
+        if [ "$USER_ROOT" = "TRUE" ]; then
+            mkdir /install
+            cp $PWD/fms/install/* /install
+            cd /install
+            DEBIAN_FRONTEND=noninteractive
+            FM_ASSISTED_INSTALL=/install apt install /install/*.deb
+        else
+            sudo mkdir /install
+            sudo cp $PWD/fms/install/* /install
+            sudo cd /install
+            DEBIAN_FRONTEND=noninteractive
+            sudo FM_ASSISTED_INSTALL=/install apt install /install/*.deb
+        fi
+
+    else
+        echo "Error: The FileMaker Server installation failed. Assisted Install.txt file not found."
+        exit 1
+    fi
+}
+
+# Check for required flags
+function requiredFlags () {
+    if [ "$FMS_VERSION" = "" ]; then
+       printf "\033[1;31mError: FileMaker Server version must be set!\033[0m\n"
+       echo "Ex: '19.4.2.204' See help page for more detail"
+       echo "fmsprep.sh --help"
+       exit 1
+    fi
+}
+
+# Make sure responses are valid.
+function responseValidation () {
+    echo "Response Validation is a WIP"
+}
+
+# Set undefined options to default
+function setDefaultOptions () {
+    if [ "$DEPLOYMENT_OPTIONS" = "" ]; then
+        DEPLOYMENT_OPTIONS=${DEPLOYMENT_OPTIONS:-0}
+    fi
+
+    if [ "$ADMIN_USER" = "" ]; then
+        ADMIN_USER=${ADMIN_USER:-admin}
+    fi
+
+    if [ "$ADMIN_PASSWORD" = "" ]; then
+        ADMIN_PASSWORD=${ADMIN_PASSWORD:-password}
+    fi
+
+    if [ "$ADMIN_PIN" = "" ]; then
+        ADMIN_PIN=${ADMIN_PIN:-1234}
+    fi
 }
 
 function version () {
     cat <<VERSION
     FileMaker Server Preperation Script
     ---
-    Version: 0.1 
+    Version: 0.2 
     Production State: Alpha
 
     The purpose of this script is to assist in the preparation of deployment
@@ -112,15 +318,20 @@ function version () {
 VERSION
 }
 
-# Declare booleans
-declare CLEAN_OLD=FALSE
-declare CREATE_CONFIG=FALSE
-declare DOWNLOAD_AND_EXTRACT=FALSE
-declare DOWNLOAD_ONLY=FALSE
+### Declare booleans ###
+    declare CLEAN_OLD=FALSE
+    declare CREATE_CONFIG=FALSE
+    declare DOWNLOAD_AND_EXTRACT=FALSE
+    declare DOWNLOAD_ONLY=FALSE
+    declare EXTRACT_ONLY=FALSE
+    declare USE_ENV=FALSE
+    declare INSTALL_SERVER=FALSE
+#
 
-# Get flags
+### Get user input ###
 while [ "$1" != "" ]; do
     case $1 in
+        # FileMaker Deployment Options
         -s | --server-version)
             shift
             FMS_VERSION=$1
@@ -151,34 +362,55 @@ while [ "$1" != "" ]; do
             LICENSE_PATH=$1
             ;;
 
+        # Script Configuration Options
+        --clean)
+            CLEAN_OLD=TRUE
+            ;;
+
         --create-config)
             CREATE_CONFIG=TRUE
             ;;
 
+        --create-env)
+            createEnv
+            ;;
+
+        --debug)
+            set -x # For debugging purposes
+            ;;
+
         --download)
             DOWNLOAD_AND_EXTRACT=TRUE
-            ;;
-        
-        --clean)
-            CLEAN_OLD=TRUE
-            echo "I'm running!"
             ;;
 
         --download-only)
             DOWNLOAD_ONLY=TRUE
             ;;
 
+        --env)
+            USE_ENV=TRUE
+            ;;
+
+        --extract-only)
+            EXTRACT_ONLY=TRUE
+            ;;
+
+        --install)
+            INSTALL_SERVER=TRUE
+            ;;
+
+        # Usage, Help, Version
+        -h | --help | --usage)
+    		usage
+    		exit 1
+    		;;
 
         -v | --version)
             version
             exit 1
             ;;
 
-        -h | --help | --usage)
-    		usage
-    		exit 1
-    		;;
-
+        # Unknown option
     	*)
 		    printf "\033[1;31mError: Invalid option!\033[0m\n"
     		usage
@@ -188,122 +420,6 @@ while [ "$1" != "" ]; do
     esac
     shift
 done
-
-# Check for required flags
-function requiredFlags () {
-    if [ "$FMS_VERSION" = "" ]; then
-       printf "\033[1;31mError: FileMaker Server version must be set!\033[0m\n"
-       echo "Ex: '19.4.2.204' See help page for more detail"
-       echo "fmsprep.sh --help"
-       exit 1
-    fi
-}
-# requiredFlags
-
-# Set undefined options to default
-function setDefaultOptions () {
-    if [ "$DEPLOYMENT_OPTIONS" = "" ]; then
-        DEPLOYMENT_OPTIONS=${DEPLOYMENT_OPTIONS:-0}
-    fi
-
-    if [ "$ADMIN_USER" = "" ]; then
-        ADMIN_USER=${ADMIN_USER:-admin}
-    fi
-
-    if [ "$ADMIN_PASSWORD" = "" ]; then
-        ADMIN_PASSWORD=${ADMIN_PASSWORD:-NotSoStrongPassword}
-    fi
-
-    if [ "$ADMIN_PIN" = "" ]; then
-        ADMIN_PIN=${ADMIN_PIN:-1234}
-    fi
-}
-
-# Make sure responses are valid.
-function responseValidation () {
-    echo "Response Validation is a WIP"
-}
-
-# Get local envirnment and create directories
-function createEnv () {
-    mkdir -p $PWD/fms/download
-    mkdir -p $PWD/fms/install
-}
-
-# Download FileMaker Server from Claris
-function getFileMakerServer () {
-    curl https://downloads.claris.com/esd/fms_${FMS_VERSION}.zip \
-        --output $PWD/fms/download/fms_${FMS_VERSION}.zip \
-        --fail #\
-        #--stderr downloadError.log
-    
-    if [ $? != 0 ]; then
-        echo "Error: The FileMaker Server download failed."
-        exit 1
-    fi
-
-    echo "FMS Download from Claris successful."
-
-}
-
-# Extract zip
-function extractServer () {
-    if ! command -v unzip &> /dev/null; then
-        echo "Error: unzip program not installed on machine."
-        echo "Install unzip. Ex: apt isntall unzip"
-        exit 1
-    else
-        unzip $PWD/fms/download/fms*.zip -d $PWD/fms/install
-    fi
-}
-
-# Check for cached version of FileMaker Server
-function checkCached () {
-    if [ -f "$PWD/fms/download/fms_${FMS_VERSION}.zip" ]; then
-            DOWNLOAD_CACHED=TRUE
-        else
-            DOWNLOAD_CACHED=FALSE
-    fi
-    # echo $DOWNLOAD_CACHED
-}
-
-# Cleanup old install
-function cleanOld () {
-    rm $PWD/fms/install/*
-}
-
-# Make the magic happen
-# function makeReady () {
-#     checkCached
-#     if [ $DOWNLOAD_CACHED = TRUE ]; 
-#         then
-#             cleanOld
-#             extractServer
-#         else
-#             getFileMakerServer
-#             extractServer
-#     fi
-# }
-
-# Created 'Assisted Install.txt' config file
-function assistedInstall () {
-    cat <<EOF > $PWD/fms/install/'Assisted Install.txt'
-[Assisted Install]
-
-License Accepted=1
-
-Deployment Options=$DEPLOYMENT_OPTIONS
-
-Admin Console User=$ADMIN_USER
-
-Admin Console Password=$ADMIN_PASSWORD
-
-Admin Console PIN=$ADMIN_PIN
-
-License Certificate Path=$LICENSE_PATH
-
-EOF
-}
 
 ### Clean install folder if user specified --clean ###
 if [ $CLEAN_OLD == TRUE ];then
@@ -349,13 +465,34 @@ fi
 if [ $CREATE_CONFIG == TRUE ];then
     echo "Generating Assisted Install.txt"
     createEnv
-    setDefaultOptions
+    if [ $USE_ENV == TRUE ];then
+        echo "Using environment variables"
+    else
+        setDefaultOptions
+    fi
     assistedInstall
     echo "Done"
 fi
 
-### 
+### Only extract the archive if user specified --extract-only ###
+if [ $EXTRACT_ONLY == TRUE ] && [ $DOWNLOAD_AND_EXTRACT != TRUE ] && [ $DOWNLOAD_ONLY != TRUE ]; then
+    echo "Checking for cached archive"
+    checkCached
+    if [ $DOWNLOAD_CACHED == FALSE ]; then echo "Download not cached. Please download FileMaker Server"; exit 1; fi
+    extractServer
 
-echo
-echo "FMS Prep successfull"
+    elif [ $DOWNLOAD_AND_EXTRACT == TRUE ] || [ $DOWNLOAD_ONLY == TRUE ]; then
+        echo "ERROR: --download-only and --download cannot be specified at the same time --extract only is specified!"
+        exit 1
+fi
+
+### Install FileMaker Server if user specified --install ###
+if [ $INSTALL_SERVER == TRUE ];then
+    installServer
+    echo "Done"
+fi
+
+echo "FMS Prep finished."
+
+# End of script
 exit 0
